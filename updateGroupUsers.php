@@ -2,7 +2,7 @@
 
 \Bitrix\Main\EventManager::getInstance()->addEventHandler(
     'sale',
-    'OnSaleBasketSaved',
+    'OnSaleOrderSaved',
     'updateUserGroups'
 );
 
