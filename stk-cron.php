@@ -8,42 +8,82 @@ use Bitrix\Main\Application as App;
 $connection = App::getConnection();
 
 
+/**
+ * Обновление цены у товара
+ */
+function updatePrice($type, $price, $id) {
+    $arFields = array(
+        "CATALOG_GROUP_ID" => $type,
+        "PRICE" => $price,
+        "CURRENCY" => "RUB"
+    );
+    \Bitrix\Catalog\Model\Price::Update($id, $arFields);
+}
+
+
 
 /**
  * Обновление продукта, который уже есть в базе данных
  */
-function updateProduct ($arrResults, $product, $connection) {
+function updateProduct ($arrResults, $product) {
 
     $name = $product['name'];
     $price = $product['price'];
-    $kratnost = $product['kratnost'];
-    $quantity = $product['quantity'];
+    $id = $arrResults[$name]['ID'];
+    $siteParsLink = $product['siteParsLink'];
+    $parseContent = parseSite($siteParsLink, $id);
+    $bigName = $parseContent[$id]['bigName'];
 
     // обновляем закупочную цену у товара
-    $arFields3 = array(
-        "CATALOG_GROUP_ID" => 2,
-        "PRICE" => $price,
-        "CURRENCY" => "RUB"
-    );
-    \Bitrix\Catalog\Model\Price::Update($arrResults[$name]['ID'], $arFields3);
-
+    $type = 2;
+    updatePrice($type, $price, $id);
 
     // обнуляем розничную цену у товара
-    $arFields4 = array(
-        "CATALOG_GROUP_ID" => 1,
-        "PRICE" => false,
-        "CURRENCY" => "RUB"
+    $type = 1;
+    updatePrice($type, 0, $id);
+
+    $el = new CIBlockElement;
+
+    $PROP = array();
+    $PROP[10653] = "Y";
+    $PROP[10630] = $product['vendorCode'];
+    $PROP[10631] = $product['volume'];
+    $PROP[10632] = 'https://santech.ru';
+    $PROP[10633] = $product['siteParsLink'];
+    $PROP[10634] = $product['brand'];
+    $PROP[10635] = $product['country'];
+    $PROP[10636] = $product['barCode'];
+    $PROP[10637] = $id;
+    $PROP[10643] = $product['picMan'];
+    $PROP[10644] = $product['parentName']; // CAT_MAN1
+    $PROP[10654] = $product['catName']; // CAT_MAN2
+    $PROP[10650] = $product['kratnost'];
+    $PROP[10651] = $product['unit'];
+    $PROP[10652] = $product['kratnost'];
+    $PROP[10647] = $bigName;
+    $PROP[10655] = $product['code']; // CODE_JDE
+
+    $arLoadProductArray = Array(
+        "MODIFIED_BY"    => 1, // элемент изменен текущим пользователем
+        "PROPERTY_VALUES"=> $PROP,
+        "ACTIVE"         => "Y",
+        "DETAIL_TEXT"    => $parseContent[$id]['body'],
+        "PREVIEW_TEXT"    => $parseContent[$id]['body'],
     );
-    \Bitrix\Catalog\Model\Price::Update($arrResults[$name]['ID'], $arFields4);
 
+    $el->Update($id, $arLoadProductArray);
 
-    $query3 = 'UPDATE `b_iblock_element_property` SET `VALUE` = ' . $kratnost . ' WHERE IBLOCK_ELEMENT_ID = ' . $arrResults[$name]['ID'] . ' AND IBLOCK_PROPERTY_ID = 10650'; // меняем кратность
-    $query4 = 'UPDATE `b_iblock_element_property` SET `VALUE` = "шт" WHERE IBLOCK_ELEMENT_ID = ' . $arrResults[$name]['ID'] . ' AND IBLOCK_PROPERTY_ID = 10651'; // меняем unit
-    $query2 = 'UPDATE `b_catalog_product` SET `QUANTITY` = ' . $quantity . ' WHERE `b_catalog_product`.`ID` = ' . $arrResults[$name]['ID'];
+    $arFields = array(
+        "VAT_ID" => 1,
+        "VAT_INCLUDED" => "Y",
+        "WIDTH" => $product['width'],
+        "LENGTH" => $product['depth'],
+        "HEIGHT" => $product['height'],
+        "QUANTITY" => $product['quantity'],
+        "WEIGHT" => $product['weight']
+    );
+    \Bitrix\Catalog\Model\Product::Update($id, $arFields);
 
-    $result2 = $connection->query($query2);
-    $result3 = $connection->query($query3);
-    $result4 = $connection->query($query4);
     unset($arrResults[$name]); // после обновления остатка товара удаляем его из массива всех товаров
 
     return $arrResults;
@@ -138,7 +178,7 @@ function getCategoriesFromXml($path) {
 /**
  * Получение всех продуктов из xml-файла
  */
-function getProductsFromXml ($path, $categories) {
+function getProductsFromXml ($path, $categories, $arrRes) {
 
     $products = [];
     $reader2 = new XMLReader();
@@ -153,9 +193,8 @@ function getProductsFromXml ($path, $categories) {
                 $name = trim($data["name"]);
                 $name = str_replace(array("\r\n", "\n", "<br>"), "", $name);
 
-                if(strpos($name, '"') != false) {
-                    $name = str_replace('"', '""', $name);
-                    $name = '"' . $name . '"';
+                if ((strpos($name, '"') != false) || (strpos($name, "'") != false)){
+                    $name = str_replace(array('"', "'"), '', $name);
                 }
 
                 $products[$id]['name'] = $name;
@@ -178,7 +217,8 @@ function getProductsFromXml ($path, $categories) {
                 $products[$id]['heightDim'] = $arrDimentions[0];
                 $products[$id]['widthDim'] = $arrDimentions[1];
                 $products[$id]['depthDim'] = $arrDimentions[2];
-                $products[$id]['code'] = $data["vendorCode"];
+                $products[$id]['vendorCode'] = $data["vendorCode"];
+                $products[$id]['code'] = $data['param'][0];
                 $products[$id]['weight'] = $data["weight"];
                 $stringParams = $data['param'][8];
                 $arrParams = explode(' ', $stringParams);
@@ -188,6 +228,9 @@ function getProductsFromXml ($path, $categories) {
                 $products[$id]['volume'] = str_replace(array('ОБЪЁМ=','М3'), '', $arrParams[5]);
                 $products[$id]['unit'] = $arrParams[0];
                 $products[$id]['pic'] = getPic($products[$id]['picMan'], $id);
+                $products[$id]['CAT1'] = $arrRes[$products[$id]['code']]['CAT1'];
+                $products[$id]['CAT2'] = $arrRes[$products[$id]['code']]['CAT2'];
+                $products[$id]['CAT3'] = $arrRes[$products[$id]['code']]['CAT3'];
 
                 if ($products[$id]['unit'] == "") {
                     $products[$id]['unit'] = $data['param'][4];
@@ -203,6 +246,7 @@ function getProductsFromXml ($path, $categories) {
         }
 
     }
+
     return $products;
 }
 
@@ -249,12 +293,18 @@ function parseSite ($url, $productId) {
  */
 function getPic ($url, $id) {
 
-    $headers = get_headers($url);
-    $answer = $headers[0];
     $pic = '';
-    if ((strpos($answer, '200') != false) || (strpos($answer, '301') != false)) {
-        $img = '/home/bitrix/ext_www/omess.ru/upload/stk-new/' . $id . '.jpg';
-        file_put_contents($img, file_get_contents($url));
+    $filename = '/home/bitrix/ext_www/omess.ru/upload/stk-new/' . $id . '.jpg';
+
+    if (!file_exists($filename)) { // если файла еще нет на сервере
+        $headers = get_headers($url);
+        $answer = $headers[0];
+        if (strpos($answer, '200') != false) {
+            $img = $filename;
+            file_put_contents($img, file_get_contents($url));
+            $pic = '/upload/stk-new/' . $id . '.jpg';
+        }
+    } else {
         $pic = '/upload/stk-new/' . $id . '.jpg';
     }
 
@@ -266,14 +316,31 @@ function getPic ($url, $id) {
 /**
  * Создание товара на основе предоставленных данных
  */
-function createProduct ($product, $productId) {
+function createProduct ($product, $productId, $parseContent, $connection) {
+
+    if(checkCodeJDE($product['code'])) {
+
+        $category = '';
+
+        if ($product['CAT3']) {
+            $category = $product['CAT3'];
+        } else {
+            $category = $product['catName'];
+        }
+
+        $bigName = $parseContent[$productId]['bigName'];
+        if ((strpos($bigName, '"') != false) || (strpos($bigName, "'") != false)){
+            $bigName = str_replace(array('"', "'"), '', $bigName);
+        }
+
+        $body = $parseContent[$productId]['body'];
 
         $el = new CIBlockElement;
 
         // формируем массив с доп полями элемента
         $PROP = array();
         $PROP[10653] = "Y";
-        $PROP[10630] = $product['code'];
+        $PROP[10630] = $product['vendorCode'];
         $PROP[10631] = $product['volume'];
         $PROP[10632] = 'https://santech.ru';
         $PROP[10633] = $product['siteParsLink'];
@@ -282,12 +349,13 @@ function createProduct ($product, $productId) {
         $PROP[10636] = $product['barCode'];
         $PROP[10637] = $productId;
         $PROP[10643] = $product['picMan'];
-        $PROP[10644] = $product['parentName']; // cat1
-        $PROP[10654] = $product['catName']; // cat2
+        $PROP[10644] = $product['parentName']; // CAT_MAN1
+        $PROP[10654] = $product['catName']; // CAT_MAN2
         $PROP[10650] = $product['kratnost'];
         $PROP[10651] = $product['unit'];
         $PROP[10652] = $product['kratnost'];
-        $PROP[10647] = $product['bigName'];
+        $PROP[10647] = $bigName;
+        $PROP[10655] = $product['code']; // CODE_JDE
 
         // параметры создания символьного кода элементы
         $params = Array(
@@ -301,7 +369,7 @@ function createProduct ($product, $productId) {
 
         // определяем ID категории элемента по названию
         $sectionId = false;
-        $arFilter = array('IBLOCK_ID' => 59, 'NAME' => $product['catName']);
+        $arFilter = array('IBLOCK_ID' => 59, 'NAME' => $category);
         $arSelect = array('ID');
         $rsSect = CIBlockSection::GetList(
             Array("SORT"=>"ASC"), //сортировка
@@ -321,14 +389,14 @@ function createProduct ($product, $productId) {
             "PROPERTY_VALUES"=> $PROP,
             "NAME"           => $product['name'],
             "ACTIVE"         => "Y",            // активен
-            "PREVIEW_TEXT"   => $product['body'],
-            "DETAIL_TEXT"    => $product['body'],
+            "PREVIEW_TEXT"   => $body,
+            "DETAIL_TEXT"    => $body,
             "DETAIL_PICTURE" => CFile::MakeFileArray($_SERVER["DOCUMENT_ROOT"] . $product['pic']),
             "PREVIEW_PICTURE" => CFile::MakeFileArray($_SERVER["DOCUMENT_ROOT"] . $product['pic']),
             "CODE" => CUtil::translit($product['name'], "ru" , $params)
         );
 
-        // создаем элемент или выводим ошибку
+        // создаем элемент
         $PRODUCT_ID = $el->Add($arLoadProductArray);
 
         // переделываем его в товар
@@ -353,6 +421,10 @@ function createProduct ($product, $productId) {
         );
         \Bitrix\Catalog\Model\Price::Add($arFields2);
 
+        echo $PRODUCT_ID;
+        die();
+
+    }
 }
 
 
@@ -387,12 +459,31 @@ function nullQuantity($arrResults, $connection) {
 
 
 
+/**
+ * проверка нет ли на сайте уже товара с таким CODE_JDE
+ */
+function checkCodeJDE($code) {
+
+    $arFields = [];
+    $arSelect = Array("ID");
+    $arFilter = Array("IBLOCK_ID"=>59, "PROPERTY_CODE_JDE" => $code);
+    $res = CIBlockElement::GetList(Array(), $arFilter, false, false, $arSelect);
+    while($ob = $res->GetNextElement())
+    {
+        $arFields[] = $ob->GetFields();
+    }
+
+    return empty($arFields);
+}
+
+
 $urlCsv = '/home/bitrix/ext_www/mbbo.ru/santech.csv';
 $arrRes = parseCsv($urlCsv);
 $arrResults = getProductsFromDB($connection);
 $path = 'https://www.santech.ru/data/custom_yandexmarket/437.xml';
 $categories = getCategoriesFromXml($path);
-$products = getProductsFromXml($path, $categories);
+$products = getProductsFromXml($path, $categories, $arrRes);
+
 
 foreach($products as $productId => $product) {
 
@@ -402,7 +493,7 @@ foreach($products as $productId => $product) {
 
     if (array_key_exists($product['name'], $arrResults)) { // если товар из прайса есть на сайте
 
-        $arrResults = updateProduct($arrResults, $product, $connection);
+        $arrResults = updateProduct($arrResults, $product);
 
     } else { // если товара из прайса нет на сайте
 
@@ -422,9 +513,9 @@ foreach($products as $productId => $product) {
             continue;
         }
 
-        createProduct($product, $productId);
+//        createProduct($product, $productId, $parseContent, $connection);
     }
 }
 
-nullQuantity($arrResults, $connection);
+//nullQuantity($arrResults, $connection);
 
