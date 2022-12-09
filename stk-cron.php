@@ -25,7 +25,7 @@ function updatePrice($type, $price, $id) {
 /**
  * Обновление продукта, который уже есть в базе данных
  */
-function updateProduct ($arrResults, $product) {
+function updateProduct($arrResults, $product) {
 
     $name = $product['name'];
     $price = $product['price'];
@@ -40,7 +40,7 @@ function updateProduct ($arrResults, $product) {
 
     // обнуляем розничную цену у товара
     $type = 1;
-    updatePrice($type, 0, $id);
+//    updatePrice($type, 0, $id);
 
     $el = new CIBlockElement;
 
@@ -63,6 +63,10 @@ function updateProduct ($arrResults, $product) {
     $PROP[10647] = $bigName;
     $PROP[10655] = $product['code']; // CODE_JDE
 
+    $height = (!empty($product['height'])) ? $product['height'] : $product['heightDim'];
+    $width = (!empty($product['width'])) ? $product['width'] : $product['widthDim'];
+    $depth = (!empty($product['depth'])) ? $product['depth'] : $product['depthDim'];
+
     $arLoadProductArray = Array(
         "MODIFIED_BY"    => 1, // элемент изменен текущим пользователем
         "PROPERTY_VALUES"=> $PROP,
@@ -76,9 +80,9 @@ function updateProduct ($arrResults, $product) {
     $arFields = array(
         "VAT_ID" => 1,
         "VAT_INCLUDED" => "Y",
-        "WIDTH" => $product['width'],
-        "LENGTH" => $product['depth'],
-        "HEIGHT" => $product['height'],
+        "WIDTH" => $width,
+        "LENGTH" => $depth,
+        "HEIGHT" => $height,
         "QUANTITY" => $product['quantity'],
         "WEIGHT" => $product['weight']
     );
@@ -178,7 +182,7 @@ function getCategoriesFromXml($path) {
 /**
  * Получение всех продуктов из xml-файла
  */
-function getProductsFromXml ($path, $categories, $arrRes) {
+function getProductsFromXml($path, $categories, $arrRes) {
 
     $products = [];
     $reader2 = new XMLReader();
@@ -255,7 +259,7 @@ function getProductsFromXml ($path, $categories, $arrRes) {
 /**
  * Парсинг страницы сайта, указанной для товара в xml-прайсе
  */
-function parseSite ($url, $productId) {
+function parseSite($url, $productId) {
 
     $parseContent = [];
     $content = file_get_contents($url);
@@ -291,7 +295,7 @@ function parseSite ($url, $productId) {
 /**
  * Получение картинки для товара
  */
-function getPic ($url, $id) {
+function getPic($url, $id) {
 
     $pic = '';
     $filename = '/home/bitrix/ext_www/omess.ru/upload/stk-new/' . $id . '.jpg';
@@ -491,7 +495,7 @@ foreach($products as $productId => $product) {
     $parentName = $product['parentName'];
     $catName = $product['catName'];
 
-    if (array_key_exists($product['name'], $arrResults)) { // если товар из прайса есть на сайте
+    if(array_key_exists($product['name'], $arrResults)) { // если товар из прайса есть на сайте
 
         $arrResults = updateProduct($arrResults, $product);
 
@@ -509,9 +513,9 @@ foreach($products as $productId => $product) {
             'Трубы чугунные ВЧШГ и соединительные детали',
         ];
 
-        if ((in_array($parentName, $arrCatNames)) || (in_array($catName, $arrCatNames))) { // если имя категории есть в массиве, то не создаем товар
-            continue;
-        }
+//        if ((in_array($parentName, $arrCatNames)) || (in_array($catName, $arrCatNames))) { // если имя категории есть в массиве, то не создаем товар
+//            continue;
+//        }
 
 //        createProduct($product, $productId, $parseContent, $connection);
     }
