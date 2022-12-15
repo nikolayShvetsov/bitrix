@@ -12,12 +12,29 @@ $connection = App::getConnection();
  * Обновление цены у товара
  */
 function updatePrice($type, $price, $id) {
+
     $arFields = array(
+        "PRODUCT_ID" => $id,
         "CATALOG_GROUP_ID" => $type,
         "PRICE" => $price,
         "CURRENCY" => "RUB"
     );
-    \Bitrix\Catalog\Model\Price::Update($id, $arFields);
+
+    $dbPrice = \Bitrix\Catalog\Model\Price::getList([
+        "filter" => array(
+            "PRODUCT_ID" => $id,
+            "CATALOG_GROUP_ID" => $type
+        )
+    ]);
+
+    if ($arPrice = $dbPrice->fetch()) {
+        \Bitrix\Catalog\Model\Price::delete($arPrice['ID']);
+        \Bitrix\Catalog\Model\Price::add($arFields, true);
+
+    } else {
+        \Bitrix\Catalog\Model\Price::add($arFields, true);
+    }
+
 }
 
 
@@ -25,72 +42,31 @@ function updatePrice($type, $price, $id) {
 /**
  * Обновление продукта, который уже есть в базе данных
  */
-function updateProduct($arrResults, $product) {
+function updateProduct($id, $article, $product) {
 
-    $name = $product['name'];
-    $price = $product['price'];
-    $id = $arrResults[$name]['ID'];
-    $siteParsLink = $product['siteParsLink'];
-    $parseContent = parseSite($siteParsLink, $id);
-    $bigName = $parseContent[$id]['bigName'];
+    $price = (float)$product['price'];
+    $zakup = (float)$product['zakup'];
+    $rrc = (int)str_replace(',', '.', trim($product['rrc']));
+    $extraCharge = $zakup/$price;
+    $extraCharge = number_format($extraCharge, 2, '.', '');
 
-    // обновляем закупочную цену у товара
-    $type = 2;
-    updatePrice($type, $price, $id);
-
-    // обнуляем розничную цену у товара
-    $type = 1;
-//    updatePrice($type, 0, $id);
-
-    $el = new CIBlockElement;
-
-    $PROP = array();
-    $PROP[10653] = "Y";
-    $PROP[10630] = $product['vendorCode'];
-    $PROP[10631] = $product['volume'];
-    $PROP[10632] = 'https://santech.ru';
-    $PROP[10633] = $product['siteParsLink'];
-    $PROP[10634] = $product['brand'];
-    $PROP[10635] = $product['country'];
-    $PROP[10636] = $product['barCode'];
-    $PROP[10637] = $id;
-    $PROP[10643] = $product['picMan'];
-    $PROP[10644] = $product['parentName']; // CAT_MAN1
-    $PROP[10654] = $product['catName']; // CAT_MAN2
-    $PROP[10650] = $product['kratnost'];
-    $PROP[10651] = $product['unit'];
-    $PROP[10652] = $product['kratnost'];
-    $PROP[10647] = $bigName;
-    $PROP[10655] = $product['code']; // CODE_JDE
-
-    $height = (!empty($product['height'])) ? $product['height'] : $product['heightDim'];
-    $width = (!empty($product['width'])) ? $product['width'] : $product['widthDim'];
-    $depth = (!empty($product['depth'])) ? $product['depth'] : $product['depthDim'];
-
-    $arLoadProductArray = Array(
-        "MODIFIED_BY"    => 1, // элемент изменен текущим пользователем
-        "PROPERTY_VALUES"=> $PROP,
-        "ACTIVE"         => "Y",
-        "DETAIL_TEXT"    => $parseContent[$id]['body'],
-        "PREVIEW_TEXT"    => $parseContent[$id]['body'],
-    );
-
-    $el->Update($id, $arLoadProductArray);
+    CIBlockElement::SetPropertyValuesEx($id,59,['10656' => $extraCharge]);
 
     $arFields = array(
         "VAT_ID" => 1,
         "VAT_INCLUDED" => "Y",
-        "WIDTH" => $width,
-        "LENGTH" => $depth,
-        "HEIGHT" => $height,
         "QUANTITY" => $product['quantity'],
-        "WEIGHT" => $product['weight']
+        "WEIGHT" => $product['weight'],
     );
     \Bitrix\Catalog\Model\Product::Update($id, $arFields);
 
-    unset($arrResults[$name]); // после обновления остатка товара удаляем его из массива всех товаров
+    // обновляем закупочную цену у товара
+    $type = 2;
+    updatePrice($type, $zakup, $id);
 
-    return $arrResults;
+    // обновляем розничную цену у товара
+    $type = 1;
+    updatePrice($type, $rrc, $id);
 }
 
 
@@ -126,7 +102,8 @@ function getProductsFromDB($connection) {
     b_iblock_element.ID,
     b_catalog_price.PRICE,
     b_catalog_product.QUANTITY,
-    b_iblock_element_property.VALUE as SITE_PARS
+    b_iblock_element_property.VALUE as SITE_PARS,
+    (SELECT VALUE FROM b_iblock_element_property WHERE b_iblock_element_property.IBLOCK_ELEMENT_ID = b_iblock_element.ID AND b_iblock_element_property.IBLOCK_PROPERTY_ID = 10655) as CODE_JDE
 FROM
     `b_iblock_element`
 LEFT JOIN b_catalog_price ON b_catalog_price.PRODUCT_ID = b_iblock_element.ID
@@ -139,9 +116,9 @@ WHERE b_iblock_element.IBLOCK_ID = 59 AND b_iblock_element_property.VALUE LIKE "
     $arrResults = [];
 
     while($arrResult = $result->fetch()) {
-        $arrResults[$arrResult['NAME']]['ID'] = $arrResult['ID'];
-        $arrResults[$arrResult['NAME']]['PRICE'] = $arrResult['PRICE'];
-        $arrResults[$arrResult['NAME']]['QUANTITY'] = $arrResult['QUANTITY'];
+        $arrResults[$arrResult['CODE_JDE']]['ID'] = $arrResult['ID'];
+        $arrResults[$arrResult['CODE_JDE']]['PRICE'] = $arrResult['PRICE'];
+        $arrResults[$arrResult['CODE_JDE']]['QUANTITY'] = $arrResult['QUANTITY'];
     }
 
     return $arrResults;
@@ -182,7 +159,7 @@ function getCategoriesFromXml($path) {
 /**
  * Получение всех продуктов из xml-файла
  */
-function getProductsFromXml($path, $categories, $arrRes) {
+function getProductsFromXml($path, $categories) {
 
     $products = [];
     $reader2 = new XMLReader();
@@ -225,6 +202,14 @@ function getProductsFromXml($path, $categories, $arrRes) {
                 $products[$id]['code'] = $data['param'][0];
                 $products[$id]['weight'] = $data["weight"];
                 $stringParams = $data['param'][8];
+
+                foreach ($data['param'] as $keyParam => $param) {
+                    if(strpos($param, ' В=') !== false) {
+                        $stringParams = $data['param'][$keyParam];
+                        break;
+                    }
+                }
+
                 $arrParams = explode(' ', $stringParams);
                 $products[$id]['height'] = str_replace(array('В=','СМ'), '', $arrParams[1]);
                 $products[$id]['width'] = str_replace(array('Ш=','СМ'), '', $arrParams[2]);
@@ -232,9 +217,7 @@ function getProductsFromXml($path, $categories, $arrRes) {
                 $products[$id]['volume'] = str_replace(array('ОБЪЁМ=','М3'), '', $arrParams[5]);
                 $products[$id]['unit'] = $arrParams[0];
                 $products[$id]['pic'] = getPic($products[$id]['picMan'], $id);
-                $products[$id]['CAT1'] = $arrRes[$products[$id]['code']]['CAT1'];
-                $products[$id]['CAT2'] = $arrRes[$products[$id]['code']]['CAT2'];
-                $products[$id]['CAT3'] = $arrRes[$products[$id]['code']]['CAT3'];
+
 
                 if ($products[$id]['unit'] == "") {
                     $products[$id]['unit'] = $data['param'][4];
@@ -316,6 +299,29 @@ function getPic($url, $id) {
 }
 
 
+/**
+ * Получение ID категории по ее названию
+ */
+function getSectionId($name) {
+
+    // определяем ID категории элемента по названию
+    $sectionId = false;
+    $arFilter = array('IBLOCK_ID' => 59, 'NAME' => $name);
+    $arSelect = array('ID');
+    $rsSect = CIBlockSection::GetList(
+        Array("SORT"=>"ASC"), //сортировка
+        $arFilter, //фильтр (выше объявили)
+        false, //выводить количество элементов - нет
+        $arSelect //выборка вывода, нам нужно только название, описание, картинка
+    );
+    while ($arSect = $rsSect->GetNext()) {
+        $sectionId = $arSect['ID'];
+    }
+
+    return $sectionId;
+}
+
+
 
 /**
  * Создание товара на основе предоставленных данных
@@ -323,14 +329,6 @@ function getPic($url, $id) {
 function createProduct ($product, $productId, $parseContent, $connection) {
 
     if(checkCodeJDE($product['code'])) {
-
-        $category = '';
-
-        if ($product['CAT3']) {
-            $category = $product['CAT3'];
-        } else {
-            $category = $product['catName'];
-        }
 
         $bigName = $parseContent[$productId]['bigName'];
         if ((strpos($bigName, '"') != false) || (strpos($bigName, "'") != false)){
@@ -371,19 +369,14 @@ function createProduct ($product, $productId, $parseContent, $connection) {
             "use_google" => "false", // отключаем использование google
         );
 
-        // определяем ID категории элемента по названию
-        $sectionId = false;
-        $arFilter = array('IBLOCK_ID' => 59, 'NAME' => $category);
-        $arSelect = array('ID');
-        $rsSect = CIBlockSection::GetList(
-            Array("SORT"=>"ASC"), //сортировка
-            $arFilter, //фильтр (выше объявили)
-            false, //выводить количество элементов - нет
-            $arSelect //выборка вывода, нам нужно только название, описание, картинка
-        );
-        while ($arSect = $rsSect->GetNext()) {
-            $sectionId = $arSect['ID'];
+        $category = '';
+        if ($product['CAT3']) {
+            $category = $product['CAT3'];
+        } else {
+            $category = $product['catName'];
         }
+
+        $sectionId = getSectionId($category);
 
         // проставляем все обязательные для элемента поля
         $arLoadProductArray = Array(
@@ -425,9 +418,6 @@ function createProduct ($product, $productId, $parseContent, $connection) {
         );
         \Bitrix\Catalog\Model\Price::Add($arFields2);
 
-        echo $PRODUCT_ID;
-        die();
-
     }
 }
 
@@ -438,23 +428,11 @@ function createProduct ($product, $productId, $parseContent, $connection) {
  */
 function nullQuantity($arrResults, $connection) {
 
-    foreach ($arrResults as $name => $product) { // переобход по всем товарам, которые есть на сайте, но нет в прайсе
+    foreach ($arrResults as $code => $product) { // переобход по всем товарам, которые есть на сайте, но нет в прайсе
         $id = $product['ID'];
-        // обновляем закупочную цену у товара
-        $arFields4 = array(
-            "PRODUCT_ID" => $id,
-            "CATALOG_GROUP_ID" => 2,
-            "PRICE" => 0,
-            "CURRENCY" => "RUB"
-        );
-        $arFields5 = array(
-            "PRODUCT_ID" => $id,
-            "CATALOG_GROUP_ID" => 1,
-            "PRICE" => 0,
-            "CURRENCY" => "RUB"
-        );
-        \Bitrix\Catalog\Model\Price::Add($arFields4);
-        \Bitrix\Catalog\Model\Price::Add($arFields5);
+
+        updatePrice(1, 0, $id);
+        updatePrice(2, 0, $id);
 
         $query3 = 'UPDATE `b_catalog_product` SET `QUANTITY` = 0 WHERE `b_catalog_product`.`ID` = ' . $id; // ставим у таких товаров количество 0
         $result = $connection->query($query3);
@@ -481,37 +459,152 @@ function checkCodeJDE($code) {
 }
 
 
+
+/**
+ * получить из базы товары с одинаковой ценой закупки и розничной ценой
+ */
+function getProductsWithTwoPrices($connection) {
+
+    $query = 'SELECT
+    b_iblock_element.NAME,
+    b_iblock_element.ID,
+    b_catalog_price.PRICE,
+    (SELECT PRICE FROM b_catalog_price WHERE b_catalog_price.PRODUCT_ID = b_iblock_element.ID AND b_catalog_price.CATALOG_GROUP_ID = 2 AND b_catalog_price.PRICE IS NOT NULL) AS OUR_PRICE,
+    b_catalog_product.QUANTITY,
+    b_iblock_element_property.VALUE as SITE_PARS
+    FROM
+        `b_iblock_element`
+    LEFT JOIN b_catalog_price ON b_catalog_price.PRODUCT_ID = b_iblock_element.ID
+    LEFT JOIN b_catalog_product ON b_catalog_product.ID = b_iblock_element.ID
+    LEFT JOIN b_iblock_element_property ON ((b_iblock_element.ID = b_iblock_element_property.IBLOCK_ELEMENT_ID) AND b_iblock_element_property.IBLOCK_PROPERTY_ID = 10632)
+    WHERE b_iblock_element.IBLOCK_ID = 59 AND b_iblock_element_property.VALUE LIKE "%santech%" AND b_catalog_price.PRICE IS NOT NULL AND b_catalog_price.PRICE != 0 AND b_catalog_price.CATALOG_GROUP_ID != 2';
+
+    $result = $connection->query($query);
+    $products = [];
+
+    while($arrResult = $result->fetch()) {
+        $products[$arrResult['ID']]['NAME'] = $arrResult['NAME'];
+        $products[$arrResult['ID']]['PRICE'] = (int)$arrResult['PRICE'];
+        $products[$arrResult['ID']]['OUR_PRICE'] = (int)$arrResult['OUR_PRICE'];
+        $products[$arrResult['ID']]['QUANTITY'] = $arrResult['QUANTITY'];
+    }
+
+    return $products;
+}
+
+
+
+/**
+ * деактивация товара на сайте
+ */
+function deactivateProduct($id) {
+    $el = new CIBlockElement;
+    $arLoadProductArray = Array("ACTIVE" => "N");
+    $el->Update($id, $arLoadProductArray);
+}
+
+
+
+/**
+ * сравнение закупочной и розничной цен у товара
+ */
+function comparePricesOfProduct($products) {
+    $needDeactivateProducts = [];
+    foreach ($products as $productId => $product) {
+
+        if (!is_null($product['OUR_PRICE']) && $product['PRICE'] <= $product['OUR_PRICE']) {
+            $needDeactivateProducts[] = $productId;
+        }
+    }
+
+    return $needDeactivateProducts;
+}
+
+
+
+/**
+ * объединяем данные с XML и CSV
+ */
+function getActualProducts($productsXML, $productsCSV, $productFromMatrixCsv) {
+
+    foreach ($productsXML as $id => $product) {
+        if (array_key_exists($product['code'], $productFromMatrixCsv)) {
+            $productsXML[$id]['CAT1'] = $productsCSV[$product['code']]['CAT1'];
+            $productsXML[$id]['CAT2'] = $productsCSV[$product['code']]['CAT2'];
+            $productsXML[$id]['CAT3'] = $productsCSV[$product['code']]['CAT3'];
+            $productsXML[$id]['zakup'] = $productFromMatrixCsv[$product['code']]['ZAKUP'];
+            $productsXML[$id]['rrc'] = $productFromMatrixCsv[$product['code']]['RRC'];
+        } else {
+            unset($productsXML[$id]);
+        }
+    }
+
+    return $productsXML;
+}
+
+
+//$productsWithTwoPrices = getProductsWithTwoPrices($connection);
+//$needDeactivateProducts = comparePricesOfProduct($productsWithTwoPrices);
+//
+//
+//foreach ($needDeactivateProducts as $productId) {
+//    deactivateProduct($productId);
+//}
+
+
+/**
+ * получаем цены из матрицы
+ */
+function getProductsFromMatrix($urlMatrix) {
+
+    $arrMatrix = file($urlMatrix);
+    unset($arrMatrix[0]);
+    $arrRes = [];
+    foreach ($arrMatrix as $row) {
+        $arrLine = explode(';', $row);
+        $code = trim($arrLine[0]);
+        $arrRes[$code]['ZAKUP'] = $arrLine[1];
+        $arrRes[$code]['RRC'] = $arrLine[2];
+    }
+    return $arrRes;
+}
+
+
 $urlCsv = '/home/bitrix/ext_www/mbbo.ru/santech.csv';
-$arrRes = parseCsv($urlCsv);
-$arrResults = getProductsFromDB($connection);
-$path = 'https://www.santech.ru/data/custom_yandexmarket/437.xml';
-$categories = getCategoriesFromXml($path);
-$products = getProductsFromXml($path, $categories, $arrRes);
+$productsCSV = parseCsv($urlCsv);
+$productsDB = getProductsFromDB($connection);
+$pathXML = 'https://www.santech.ru/data/custom_yandexmarket/437.xml';
+$categoriesXML = getCategoriesFromXml($pathXML);
+$productsXML = getProductsFromXml($pathXML, $categoriesXML);
+$urlMatrix = '/home/bitrix/ext_www/mbbo.ru/matrix.csv';
+$productFromMatrixCsv = getProductsFromMatrix($urlMatrix);
+$actualProducts = getActualProducts($productsXML, $productsCSV, $productFromMatrixCsv);
 
 
-foreach($products as $productId => $product) {
+foreach($actualProducts as $article => $product) {
 
     $siteParsLink = $product['siteParsLink'];
     $parentName = $product['parentName'];
     $catName = $product['catName'];
 
-    if(array_key_exists($product['name'], $arrResults)) { // если товар из прайса есть на сайте
-
-        $arrResults = updateProduct($arrResults, $product);
+    if(array_key_exists($product['code'], $productsDB)) { // если товар из прайса есть на сайте
+        $productId = $productsDB[$product['code']]['ID'];
+        updateProduct($productId, $article, $product);
+        unset($productsDB[$product['code']]); // после обновления остатка товара удаляем его из массива всех товаров
 
     } else { // если товара из прайса нет на сайте
 
-        $parseContent = parseSite($siteParsLink, $productId);
-        $arrCatNames = [
-            'Трубы стальные бесшовные',
-            'Трубы стальные электросварные',
-            'Трубы стальные ВГП',
-            'Металлопрокат',
-            'Трубы чугунные безраструбные SML и соединительные детали',
-            'Трубы чугунные ЧК и соединительные детали',
-            'Трубы асбестоцементные и соединительные детали',
-            'Трубы чугунные ВЧШГ и соединительные детали',
-        ];
+//        $parseContent = parseSite($siteParsLink, $productId);
+//        $arrCatNames = [
+//            'Трубы стальные бесшовные',
+//            'Трубы стальные электросварные',
+//            'Трубы стальные ВГП',
+//            'Металлопрокат',
+//            'Трубы чугунные безраструбные SML и соединительные детали',
+//            'Трубы чугунные ЧК и соединительные детали',
+//            'Трубы асбестоцементные и соединительные детали',
+//            'Трубы чугунные ВЧШГ и соединительные детали',
+//        ];
 
 //        if ((in_array($parentName, $arrCatNames)) || (in_array($catName, $arrCatNames))) { // если имя категории есть в массиве, то не создаем товар
 //            continue;
@@ -521,5 +614,5 @@ foreach($products as $productId => $product) {
     }
 }
 
-//nullQuantity($arrResults, $connection);
+nullQuantity($productsDB, $connection);
 
