@@ -38,7 +38,6 @@ function updatePrice($type, $price, $id) {
 }
 
 
-
 /**
  * Обновление продукта, который уже есть в базе данных
  */
@@ -68,28 +67,6 @@ function updateProduct($id, $article, $product) {
     $type = 1;
     updatePrice($type, $rrc, $id);
 }
-
-
-
-/**
- * Парсинг csv-файла с последующей передачей данных в продукт
- */
-function parseCsv($file) {
-    $arrMatrix = file($file);
-    unset($arrMatrix[0]);
-    $arrRes = [];
-    foreach ($arrMatrix as $row) {
-        $arrLine = explode(';', $row);
-        $code = trim($arrLine[6]);
-        $arrRes[$code]['NAME'] = $arrLine[0];
-        $arrRes[$code]['BRAND'] = $arrLine[2];
-        $arrRes[$code]['CAT1'] = $arrLine[3];
-        $arrRes[$code]['CAT2'] = $arrLine[4];
-        $arrRes[$code]['CAT3'] = $arrLine[5];
-    }
-    return $arrRes;
-}
-
 
 
 /**
@@ -123,37 +100,6 @@ WHERE b_iblock_element.IBLOCK_ID = 59 AND b_iblock_element_property.VALUE LIKE "
 
     return $arrResults;
 }
-
-
-
-/**
- * Получение списка всех категорий из xml-файла
- */
-function getCategoriesFromXml($path) {
-
-    $reader = new XMLReader();
-    $reader->open($path);
-    $i = 0;
-    $categories = [];
-
-    while ($reader->read()) {
-        if ($reader->nodeType == XMLReader::ELEMENT) {
-            if ($reader->localName == 'category') {
-                $value = $reader->expand(new DOMDocument());
-                $sx = simplexml_import_dom($value);
-                $data = (array)$sx;
-                $id = $data["@attributes"]['id'];
-                $parentId = $data["@attributes"]['parentId'];
-                $nameCategory = $data[0];
-                $categories[$id]['name'] = $nameCategory;
-                $categories[$id]['parent'] = $parentId;
-            }
-        }
-    }
-
-    return $categories;
-}
-
 
 
 /**
@@ -238,41 +184,54 @@ function getProductsFromXml($path, $categories) {
 }
 
 
-
 /**
- * Парсинг страницы сайта, указанной для товара в xml-прайсе
+ * Парсинг csv-файла
  */
-function parseSite($url, $productId) {
+function parseCsv($file, $idCode) {
+    $arrMatrix = file($file);
+    $arrHeaders = explode(';', $arrMatrix[0]);
 
-    $parseContent = [];
-    $content = file_get_contents($url);
-    $stringBodyWithoutHeader = explode('<table class="property__table js-table-property">', $content, 2)[1];
-    $stringBody = explode('<div class="property__button buttons">', $stringBodyWithoutHeader, 2)[0];
-    $arrTr = explode('</tr>', $stringBody);
-    unset($arrTr[count($arrTr) - 1]);
-    $parseContent[$productId]['body'] = '<ul>';
+    unset($arrMatrix[0]);
+    $arrRes = [];
+    foreach ($arrMatrix as $row) {
+        $arrLine = explode(';', $row);
+        $code = trim($arrLine[$idCode]);
 
-    foreach ($arrTr as $tr) {
-        $nameTr1 = explode('<td class="property__table-name', $tr, 2)[1];
-        $nameTr2 = explode('</td>', $nameTr1, 2)[0];
-        $nameTr = trim(strip_tags($nameTr2));
-        $nameTr = str_replace(array('item-specs-col">', '">'), '', $nameTr);
-        $valueTr1 = explode('<td class="property__table-value', $tr, 2)[1];
-        $valueTr2 = explode('</td>', $valueTr1, 2)[0];
-        $valueTr = strip_tags($valueTr2);
-        $valueTr = str_replace(array('item-specs-col" itemprop="gtin">', 'item-specs-col">', '">'), '', $valueTr);
-        $parseContent[$productId]['body'] .= '<li>' . $nameTr . ': ' . $valueTr . '</li>';
+        foreach ($arrHeaders as $key => $header) {
+            $arrRes[$code][trim($header)] = trim($arrLine[$key]);
+        }
     }
-
-    $stringH1WithoutHeader = explode('<h1 class="product__title" itemprop="name">', $content, 2)[1];
-    $stringH1 = explode('</h1>', $stringH1WithoutHeader, 2)[0];
-    $parseContent[$productId]['body'] .= '</ul>';
-    $parseContent[$productId]['bigName'] = trim($stringH1);
-
-
-    return $parseContent;
+    return $arrRes;
 }
 
+
+/**
+ * Получение списка всех категорий из xml-файла
+ */
+function getCategoriesFromXml($path) {
+
+    $reader = new XMLReader();
+    $reader->open($path);
+    $i = 0;
+    $categories = [];
+
+    while ($reader->read()) {
+        if ($reader->nodeType == XMLReader::ELEMENT) {
+            if ($reader->localName == 'category') {
+                $value = $reader->expand(new DOMDocument());
+                $sx = simplexml_import_dom($value);
+                $data = (array)$sx;
+                $id = $data["@attributes"]['id'];
+                $parentId = $data["@attributes"]['parentId'];
+                $nameCategory = $data[0];
+                $categories[$id]['name'] = $nameCategory;
+                $categories[$id]['parent'] = $parentId;
+            }
+        }
+    }
+
+    return $categories;
+}
 
 
 /**
@@ -300,33 +259,9 @@ function getPic($url, $id) {
 
 
 /**
- * Получение ID категории по ее названию
- */
-function getSectionId($name) {
-
-    // определяем ID категории элемента по названию
-    $sectionId = false;
-    $arFilter = array('IBLOCK_ID' => 59, 'NAME' => $name);
-    $arSelect = array('ID');
-    $rsSect = CIBlockSection::GetList(
-        Array("SORT"=>"ASC"), //сортировка
-        $arFilter, //фильтр (выше объявили)
-        false, //выводить количество элементов - нет
-        $arSelect //выборка вывода, нам нужно только название, описание, картинка
-    );
-    while ($arSect = $rsSect->GetNext()) {
-        $sectionId = $arSect['ID'];
-    }
-
-    return $sectionId;
-}
-
-
-
-/**
  * Создание товара на основе предоставленных данных
  */
-function createProduct ($product, $productId, $parseContent, $connection) {
+function createProduct ($product, $productId, $parseContent) {
 
     if(checkCodeJDE($product['code'])) {
 
@@ -422,7 +357,6 @@ function createProduct ($product, $productId, $parseContent, $connection) {
 }
 
 
-
 /**
  * Обнуление цены и количества у товара, который есть на сайте, но нет в xml-прайсе
  */
@@ -439,6 +373,36 @@ function nullQuantity($arrResults, $connection) {
     }
 }
 
+
+/**
+ * объединяем данные с XML и CSV
+ */
+function getActualProducts($productsXML, $productsCSV, $productFromMatrixCsv) {
+
+    foreach ($productsXML as $id => $product) {
+        if (array_key_exists($product['code'], $productFromMatrixCsv)) {
+            $productsXML[$id]['CAT1'] = $productsCSV[$product['code']]['CAT1'];
+            $productsXML[$id]['CAT2'] = $productsCSV[$product['code']]['CAT2'];
+            $productsXML[$id]['CAT3'] = $productsCSV[$product['code']]['CAT3'];
+            $productsXML[$id]['zakup'] = $productFromMatrixCsv[$product['code']]['ZAKUP'];
+            $productsXML[$id]['rrc'] = $productFromMatrixCsv[$product['code']]['RRC'];
+        } else {
+            unset($productsXML[$id]);
+        }
+    }
+
+    return $productsXML;
+}
+
+
+/**
+ * деактивация товара на сайте
+ */
+function deactivateProduct($id) {
+    $el = new CIBlockElement;
+    $arLoadProductArray = Array("ACTIVE" => "N");
+    $el->Update($id, $arLoadProductArray);
+}
 
 
 /**
@@ -458,6 +422,63 @@ function checkCodeJDE($code) {
     return empty($arFields);
 }
 
+
+/**
+ * Получение ID категории по ее названию
+ */
+function getSectionId($name) {
+
+    // определяем ID категории элемента по названию
+    $sectionId = false;
+    $arFilter = array('IBLOCK_ID' => 59, 'NAME' => $name);
+    $arSelect = array('ID');
+    $rsSect = CIBlockSection::GetList(
+        Array("SORT"=>"ASC"), //сортировка
+        $arFilter, //фильтр (выше объявили)
+        false, //выводить количество элементов - нет
+        $arSelect //выборка вывода, нам нужно только название, описание, картинка
+    );
+    while ($arSect = $rsSect->GetNext()) {
+        $sectionId = $arSect['ID'];
+    }
+
+    return $sectionId;
+}
+
+
+/**
+ * Парсинг страницы сайта, указанной для товара в xml-прайсе
+ */
+function parseSite($url, $productId) {
+
+    $parseContent = [];
+    $content = file_get_contents($url);
+    $stringBodyWithoutHeader = explode('<table class="property__table js-table-property">', $content, 2)[1];
+    $stringBody = explode('<div class="property__button buttons">', $stringBodyWithoutHeader, 2)[0];
+    $arrTr = explode('</tr>', $stringBody);
+    unset($arrTr[count($arrTr) - 1]);
+    $parseContent[$productId]['body'] = '<ul>';
+
+    foreach ($arrTr as $tr) {
+        $nameTr1 = explode('<td class="property__table-name', $tr, 2)[1];
+        $nameTr2 = explode('</td>', $nameTr1, 2)[0];
+        $nameTr = trim(strip_tags($nameTr2));
+        $nameTr = str_replace(array('item-specs-col">', '">'), '', $nameTr);
+        $valueTr1 = explode('<td class="property__table-value', $tr, 2)[1];
+        $valueTr2 = explode('</td>', $valueTr1, 2)[0];
+        $valueTr = strip_tags($valueTr2);
+        $valueTr = str_replace(array('item-specs-col" itemprop="gtin">', 'item-specs-col">', '">'), '', $valueTr);
+        $parseContent[$productId]['body'] .= '<li>' . $nameTr . ': ' . $valueTr . '</li>';
+    }
+
+    $stringH1WithoutHeader = explode('<h1 class="product__title" itemprop="name">', $content, 2)[1];
+    $stringH1 = explode('</h1>', $stringH1WithoutHeader, 2)[0];
+    $parseContent[$productId]['body'] .= '</ul>';
+    $parseContent[$productId]['bigName'] = trim($stringH1);
+
+
+    return $parseContent;
+}
 
 
 /**
@@ -493,18 +514,6 @@ function getProductsWithTwoPrices($connection) {
 }
 
 
-
-/**
- * деактивация товара на сайте
- */
-function deactivateProduct($id) {
-    $el = new CIBlockElement;
-    $arLoadProductArray = Array("ACTIVE" => "N");
-    $el->Update($id, $arLoadProductArray);
-}
-
-
-
 /**
  * сравнение закупочной и розничной цен у товара
  */
@@ -521,28 +530,6 @@ function comparePricesOfProduct($products) {
 }
 
 
-
-/**
- * объединяем данные с XML и CSV
- */
-function getActualProducts($productsXML, $productsCSV, $productFromMatrixCsv) {
-
-    foreach ($productsXML as $id => $product) {
-        if (array_key_exists($product['code'], $productFromMatrixCsv)) {
-            $productsXML[$id]['CAT1'] = $productsCSV[$product['code']]['CAT1'];
-            $productsXML[$id]['CAT2'] = $productsCSV[$product['code']]['CAT2'];
-            $productsXML[$id]['CAT3'] = $productsCSV[$product['code']]['CAT3'];
-            $productsXML[$id]['zakup'] = $productFromMatrixCsv[$product['code']]['ZAKUP'];
-            $productsXML[$id]['rrc'] = $productFromMatrixCsv[$product['code']]['RRC'];
-        } else {
-            unset($productsXML[$id]);
-        }
-    }
-
-    return $productsXML;
-}
-
-
 //$productsWithTwoPrices = getProductsWithTwoPrices($connection);
 //$needDeactivateProducts = comparePricesOfProduct($productsWithTwoPrices);
 //
@@ -552,32 +539,15 @@ function getActualProducts($productsXML, $productsCSV, $productFromMatrixCsv) {
 //}
 
 
-/**
- * получаем цены из матрицы
- */
-function getProductsFromMatrix($urlMatrix) {
-
-    $arrMatrix = file($urlMatrix);
-    unset($arrMatrix[0]);
-    $arrRes = [];
-    foreach ($arrMatrix as $row) {
-        $arrLine = explode(';', $row);
-        $code = trim($arrLine[0]);
-        $arrRes[$code]['ZAKUP'] = $arrLine[1];
-        $arrRes[$code]['RRC'] = $arrLine[2];
-    }
-    return $arrRes;
-}
-
 
 $urlCsv = '/home/bitrix/ext_www/mbbo.ru/santech.csv';
-$productsCSV = parseCsv($urlCsv);
+$productsCSV = parseCsv($urlCsv, 6);
 $productsDB = getProductsFromDB($connection);
 $pathXML = 'https://www.santech.ru/data/custom_yandexmarket/437.xml';
 $categoriesXML = getCategoriesFromXml($pathXML);
 $productsXML = getProductsFromXml($pathXML, $categoriesXML);
 $urlMatrix = '/home/bitrix/ext_www/mbbo.ru/matrix.csv';
-$productFromMatrixCsv = getProductsFromMatrix($urlMatrix);
+$productFromMatrixCsv = parseCsv($urlMatrix, 0);
 $actualProducts = getActualProducts($productsXML, $productsCSV, $productFromMatrixCsv);
 
 
