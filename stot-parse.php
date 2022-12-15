@@ -9,12 +9,15 @@ $connection = App::getConnection();
 
 
 /**
- * Получение картинки для товара
+ * загрузка картинки
  */
-function getPic($url, $id) {
+function uploadPic($filename, $url, $id, $key) {
 
     $pic = '';
-    $filename = '/home/bitrix/ext_www/omess.ru/upload/stot-new/' . $id . '.jpg';
+
+    if(!is_null($key)) {
+        $key = '_' . $key;
+    }
 
     if (!file_exists($filename)) { // если файла еще нет на сервере
         $headers = get_headers($url);
@@ -22,10 +25,44 @@ function getPic($url, $id) {
         if (strpos($answer, '200') != false) {
             $img = $filename;
             file_put_contents($img, file_get_contents($url));
-            $pic = '/upload/stot-new/' . $id . '.jpg';
+            $pic = '/upload/stot-new/' . $id . $key . '.jpg';
         }
     } else {
-        $pic = '/upload/stot-new/' . $id . '.jpg';
+        $pic = '/upload/stot-new/' . $id . $key . '.jpg';
+    }
+
+    return $pic;
+}
+
+
+
+/**
+ * Получение картинки для товара
+ */
+function getPic($url, $id, $more) {
+
+    $pic = '';
+
+    if ($more == 1) {
+        if (strpos($url, ',') !== false) {
+            $arrUrls = explode(',', $url);
+            $lastKey = array_key_last($arrUrls);
+            $divider = ',';
+            foreach ($arrUrls as $key => $newUrl) {
+                if ($key == $lastKey) { $divider = ''; }
+                $filename = '/home/bitrix/ext_www/omess.ru/upload/stot-new/' . $id . '_' . $key . '.jpg';
+                $pic .= uploadPic($filename, $url, $id, $key) . $divider;
+
+            }
+        } else {
+            $filename = '/home/bitrix/ext_www/omess.ru/upload/stot-new/' . $id . '_0.jpg';
+            $pic = uploadPic($filename, $url, $id, 0);
+        }
+    } else {
+
+        $filename = '/home/bitrix/ext_www/omess.ru/upload/stot-new/' . $id . '.jpg';
+
+        $pic = uploadPic($filename, $url, $id, null);
     }
 
     return $pic;
@@ -69,12 +106,6 @@ WHERE b_iblock_element.IBLOCK_ID = 59 AND b_iblock_element_property.VALUE LIKE "
  */
 function updateProduct($id, $article, $product) {
 
-    echo '<pre>';
-    var_dump($product);
-    echo '</pre>';
-
-    die();
-
     // обновляем закупочную цену у товара
     $type = 2;
     updatePrice($type, $product['price'], $id);
@@ -87,29 +118,17 @@ function updateProduct($id, $article, $product) {
     $el = new CIBlockElement;
 
     $PROP = array();
-    $PROP[10653] = "Y"; // MADE_CRON
+
     $PROP[10631] = $product['volume'];
-    $PROP[10632] = 'https://stot.ru';
-    $PROP[10633] = $product['siteParsLink'];
-    $PROP[10634] = $product['brand'];
-    $PROP[10637] = $article;
-    $PROP[10643] = $product['pic'];
     $PROP[10644] = $product['cat1']; // CAT_MAN1
+    $PROP[10653] = "Y"; // MADE_CRON
     $PROP[10654] = $product['cat2']; // CAT_MAN2
     $PROP[10655] = $article; // CODE_JDE
-
-    $height = (!empty($product['height'])) ? $product['height'] : $product['heightDim'];
-    $width = (!empty($product['width'])) ? $product['width'] : $product['widthDim'];
-    $depth = (!empty($product['depth'])) ? $product['depth'] : $product['depthDim'];
 
     $arLoadProductArray = Array(
         "MODIFIED_BY"    => 1, // элемент изменен текущим пользователем
         "PROPERTY_VALUES"=> $PROP,
-        "ACTIVE"         => "Y",
-        "DETAIL_TEXT"    => $product['bodyOldXml'],
-        "PREVIEW_TEXT"    => $product['body'],
-        "DETAIL_PICTURE"    => CFile::MakeFileArray($_SERVER["DOCUMENT_ROOT"].$pic),
-        "PREVIEW_PICTURE"    => CFile::MakeFileArray($_SERVER["DOCUMENT_ROOT"].$pic)
+        "ACTIVE"         => "Y"
     );
 
     $el->Update($id, $arLoadProductArray);
@@ -117,11 +136,7 @@ function updateProduct($id, $article, $product) {
     $arFields = array(
         "VAT_ID" => 1,
         "VAT_INCLUDED" => "Y",
-        "WIDTH" => $width,
-        "LENGTH" => $depth,
-        "HEIGHT" => $height,
-        "QUANTITY" => $product['quantity'],
-        "WEIGHT" => $product['weight']
+        "QUANTITY" => $product['quantity']
     );
     \Bitrix\Catalog\Model\Product::Update($id, $arFields);
 
@@ -372,8 +387,8 @@ function getActualProducts($productsXML, $productsOldXML, $productsFromCsv) {
             $actualProducts[$productId]['picMan'] = $productsOldXML[$productId]['picMan'];
             $actualProducts[$productId]['bodyOldXml'] = $productsOldXML[$productId]['bodyOldXml'];
             $actualProducts[$productId]['categoryOldXml'] = $productsOldXML[$productId]['categoryOldXml'];
-            $actualProducts[$productId]['pic'] = getPic($productsFromCsv[$productId]['PIC'], $productId);
-            $actualProducts[$productId]['moreFotos'] = $productsFromCsv[$productId]['MORE_FOTOS'];
+            $actualProducts[$productId]['pic'] = getPic($productsFromCsv[$productId]['PIC'], $productId, 0);
+            $actualProducts[$productId]['moreFotos'] = getPic($productsFromCsv[$productId]['MORE_FOTOS'], $productId, 1);
             $actualProducts[$productId]['cat1'] = $productsFromCsv[$productId]['CAT1'];
             $actualProducts[$productId]['cat2'] = $productsFromCsv[$productId]['CAT2'];
             $actualProducts[$productId]['siteParseLink'] = $productsFromCsv[$productId]['SITE_PARS_LINK'];
@@ -387,11 +402,119 @@ function getActualProducts($productsXML, $productsOldXML, $productsFromCsv) {
 
 
 /**
+ * Получение ID категории по ее названию
+ */
+function getSectionId($name) {
+
+    // определяем ID категории элемента по названию
+    $sectionId = false;
+
+    if ($name) {
+        $arFilter = array('IBLOCK_ID' => 59, 'NAME' => $name);
+        $arSelect = array('ID');
+        $rsSect = CIBlockSection::GetList(
+            Array("SORT"=>"ASC"), //сортировка
+            $arFilter, //фильтр (выше объявили)
+            false, //выводить количество элементов - нет
+            $arSelect //выборка вывода, нам нужно только ID
+        );
+        while ($arSect = $rsSect->GetNext()) {
+            $sectionId = $arSect['ID'];
+        }
+    }
+
+    return $sectionId;
+}
+
+
+/**
  * Создание нового товара в базе
  */
-function createProduct($product) {
+function createProduct($article, $product) {
+
+    $el = new CIBlockElement;
+    $PROP = array();
+    $PROP[10631] = $product['volume'];
+    $PROP[10632] = 'https://stot.ru';
+    $PROP[10633] = $product['siteParsLink'];
+    $PROP[10634] = $product['brand'];
+    $PROP[10637] = $article;
+    $PROP[10638] = $product["material"];
+    $PROP[10639] = $product["diametr"];
+    $PROP[10640] = $product["status"];
+    $PROP[10641] = $product["garanty"];
+    $PROP[10643] = $product['pic'];
+    $PROP[10644] = $product['cat1']; // CAT_MAN1
+    $PROP[10653] = "Y"; // MADE_CRON
+    $PROP[10654] = $product['cat2']; // CAT_MAN2
+    $PROP[10655] = $article; // CODE_JDE
+
+    $stringMorePhotos = $product['moreFotos'];
+    $arrMorePhotos = explode(',', $stringMorePhotos);
+    $arFile = [];
+
+    foreach ($arrMorePhotos as $key => $item) {
+        $arFile[$key]["VALUE"] = CFile::MakeFileArray($_SERVER["DOCUMENT_ROOT"] . $item);
+        $arFile[$key]["DESCRIPTION"] = "";
+    }
+
+    $height = (!empty($product['height'])) ? $product['height'] : $product['heightDim'];
+    $width = (!empty($product['width'])) ? $product['width'] : $product['widthDim'];
+    $depth = (!empty($product['depth'])) ? $product['depth'] : $product['depthDim'];
+
+    // параметры создания символьного кода элементы
+    $params = Array(
+        "max_len" => "100", // обрезает символьный код до 100 символов
+        "change_case" => "L", // буквы преобразуются к нижнему регистру
+        "replace_space" => "_", // меняем пробелы на нижнее подчеркивание
+        "replace_other" => "_", // меняем левые символы на нижнее подчеркивание
+        "delete_repeat_replace" => "true", // удаляем повторяющиеся нижние подчеркивания
+        "use_google" => "false", // отключаем использование google
+    );
+
+    $category = '';
+    if ($product['cat2']) {
+        $category = $product['cat2'];
+    } else {
+        $category = $product['cat1'];
+    }
+
+    $sectionId = getSectionId($category);
+
+    $arLoadProductArray = Array(
+        "MODIFIED_BY"    => 1, // элемент изменен текущим пользователем
+        "IBLOCK_ID"      => 59,
+        "IBLOCK_SECTION_ID" => $sectionId,
+        "PROPERTY_VALUES"=> $PROP,
+        "ACTIVE"         => "Y",
+        "NAME"    => $product['name'],
+        "DETAIL_TEXT"    => $product['bodyOldXml'],
+        "PREVIEW_TEXT"    => $product['body'],
+        "DETAIL_PICTURE"    => CFile::MakeFileArray($_SERVER["DOCUMENT_ROOT"].$product['pic']),
+        "PREVIEW_PICTURE"    => CFile::MakeFileArray($_SERVER["DOCUMENT_ROOT"].$product['pic']),
+        "CODE" => CUtil::translit($product['name'], "ru" , $params)
+    );
+
+    // создаем элемент
+    $PRODUCT_ID = $el->Add($arLoadProductArray);
+
+    CIBlockElement::SetPropertyValueCode($PRODUCT_ID, 10649, $arFile);
+
+    $arFields = array(
+        "VAT_ID" => 1,
+        "VAT_INCLUDED" => "Y",
+        "WIDTH" => $width,
+        "LENGTH" => $depth,
+        "HEIGHT" => $height,
+        "QUANTITY" => $product['quantity'],
+        "WEIGHT" => $product['weight']
+    );
+    \Bitrix\Catalog\Model\Product::add($arFields);
+
+    updatePrice(2, $product['price'], $PRODUCT_ID);
 
 }
+
 
 
 /**
@@ -399,11 +522,26 @@ function createProduct($product) {
  */
 function updatePrice($type, $price, $id) {
     $arFields = array(
+        "PRODUCT_ID" => $id,
         "CATALOG_GROUP_ID" => $type,
         "PRICE" => $price,
         "CURRENCY" => "RUB"
     );
-    \Bitrix\Catalog\Model\Price::Update($id, $arFields);
+
+    $dbPrice = \Bitrix\Catalog\Model\Price::getList([
+        "filter" => array(
+            "PRODUCT_ID" => $id,
+            "CATALOG_GROUP_ID" => $type
+        )
+    ]);
+
+    if ($arPrice = $dbPrice->fetch()) {
+        \Bitrix\Catalog\Model\Price::delete($arPrice['ID']);
+        \Bitrix\Catalog\Model\Price::add($arFields, true);
+
+    } else {
+        \Bitrix\Catalog\Model\Price::add($arFields, true);
+    }
 }
 
 
@@ -429,7 +567,7 @@ foreach ($actualProducts as $article => $product) {
         unset($productsDB[$product['name']]);
 
     } else {
-//        createProduct($product);
+//        createProduct($article, $product);
     }
 }
 
