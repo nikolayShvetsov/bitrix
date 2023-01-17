@@ -8,11 +8,198 @@ ini_set("max_execution_time", 300000000);
 use Bitrix\Main\Diag\Debug;
 use Bitrix\Main\Application as App;
 
-$connection = App::getConnection();
-
 
 class Stk extends Parser
 {
+    const PATH_XML = 'https://www.santech.ru/data/custom_yandexmarket/437.xml';
+    const MATRIX_FILE = '/home/bitrix/ext_www/mbbo.ru/matrix.csv';
+
+
+    /**
+     * старт обновления товара
+     */
+    public static function cron()
+    {
+//        require_once('/home/bitrix/ext_www/mbbo.ru/stk-cron.php');
+
+        $quantityProducts = self::getQuantityProducts();
+        $urlCsv = '/home/bitrix/ext_www/mbbo.ru/santech.csv';
+        $productsCSV = parent::parseCsv($urlCsv, 6);
+        $connection = \Bitrix\Main\Application::getConnection();
+        $productsDB = parent::getProductsFromDB($connection, 'santech');
+        $categoriesXML = parent::getCategoriesFromXml(self::PATH_XML);
+        $productsXML = self::getProductsFromXml(self::PATH_XML, $categoriesXML, $quantityProducts);
+        $productFromMatrixCsv = self::getProductsFromMatrix();
+        $actualProducts = self::getActualProducts($productsXML, $productsCSV, $productFromMatrixCsv);
+
+        foreach ($actualProducts as $article => $product) {
+
+            $siteParsLink = $product['siteParsLink'];
+            $parentName = $product['parentName'];
+            $catName = $product['catName'];
+
+            if (array_key_exists($product['code'], $productsDB)) { // если товар из прайса есть на сайте
+                $productId = $productsDB[$product['code']]['ID'];
+                parent::updateProduct($productId, $article, $product);
+
+                if (array_key_exists($product['code'], $quantityProducts)) {
+                    self::updateProductWithQuantity($productId, $quantityProducts[$product['code']]);
+                }
+
+                unset($productsDB[$product['code']]); // после обновления остатка товара удаляем его из массива всех товаров
+
+            } else { // если товара из прайса нет на сайте
+
+                $parseContent = self::parseSite($siteParsLink, $article);
+                $arrCatNames = [
+                    'Трубы стальные бесшовные',
+                    'Трубы стальные электросварные',
+                    'Трубы стальные ВГП',
+                    'Металлопрокат',
+                    'Трубы чугунные безраструбные SML и соединительные детали',
+                    'Трубы чугунные ЧК и соединительные детали',
+                    'Трубы асбестоцементные и соединительные детали',
+                    'Трубы чугунные ВЧШГ и соединительные детали',
+                ];
+
+                if ((in_array($parentName, $arrCatNames)) || (in_array($catName, $arrCatNames))) { // если имя категории есть в массиве, то не создаем товар
+                    continue;
+                }
+
+                self::createProduct($product, $article, $parseContent);
+
+                if (array_key_exists($product['code'], $quantityProducts)) {
+                    self::updateProductWithQuantity($productId, $quantityProducts[$product['code']]);
+                }
+            }
+        }
+
+        parent::nullQuantity($productsDB, $connection);
+
+        return "\My\Parser\Stk::cron();";
+    }
+
+
+    /**
+     * Получение цен из матрицы
+     */
+    public static function getProductsFromMatrix()
+    {
+        return parent::parseCsv(self::MATRIX_FILE, 0);
+    }
+
+
+    /**
+     * Ускоренное обновление цены и остатка товара
+     */
+    public static function updateOnlyPrice() {
+        $quantityProducts = self::getQuantityProducts();
+        $productsXml = self::getPriceQuantityProductsFromXml(self::PATH_XML, $quantityProducts);
+        $productsMatrix = self::getProductsFromMatrix();
+        $connection = \Bitrix\Main\Application::getConnection();
+        $productsDb = parent::getProductsFromDB($connection, 'santech');
+
+        foreach ($productsXml as $product) {
+            if(array_key_exists($product['code'], $productsDb)) {
+                $productId = $productsDb[$product['code']]['ID'];
+                $rrc = $productsMatrix[$product['code']]['RRC'];
+                $quantity = $product['quantity'];
+
+                $arFields = array(
+                    "VAT_ID" => 1,
+                    "VAT_INCLUDED" => "Y",
+                    "QUANTITY" => (int)$quantity,
+                );
+                \Bitrix\Catalog\Model\Product::Update($productId, $arFields);
+
+                // обновляем розничную цену у товара
+                $type = 1;
+                
+                parent::updatePrice($type, (float)$rrc, $productId);
+
+            }
+        }
+
+        return "\My\Parser\Stk::updateOnlyPrice();";
+    }
+
+
+    /**
+     * получение товаров с нестандартным количеством
+     */
+    public static function getQuantityProducts() {
+        return parent::parseCsv('/home/bitrix/ext_www/mbbo.ru/quantity.csv', 0);
+    }
+
+
+    /**
+     * Получение продуктов из xml-файла только с ценой и количеством
+     */
+    public static function getPriceQuantityProductsFromXml($path, $quantityProducts) {
+
+        $products = [];
+        $reader2 = new \XMLReader();
+        $reader2->open($path);
+        while ($reader2->read()) {
+            if ($reader2->nodeType == \XMLReader::ELEMENT) {
+                if ($reader2->localName == 'offer') {
+                    $value = $reader2->expand(new \DOMDocument());
+                    $sx = simplexml_import_dom($value);
+                    $data = (array)$sx;
+                    $id = $data["@attributes"]['id'];
+                    $products[$id]['quantity'] = $data["@attributes"]['count'];
+                    $products[$id]['price'] = (float)$data["price"];
+                    $products[$id]['kratnost'] = (float)$data['param'][5];
+                    $stringParams = $data['param'][8];
+                    $products[$id]['code'] = $data['param'][0];
+
+                    foreach ($data['param'] as $keyParam => $param) {
+                        if(strpos($param, ' В=') !== false) {
+                            $stringParams = $data['param'][$keyParam];
+                            break;
+                        }
+                    }
+
+                    $arrParams = explode(' ', $stringParams);
+                    $products[$id]['unit'] = $arrParams[0];
+
+                    if ($products[$id]['unit'] == "")
+                        $products[$id]['unit'] = $data['param'][4];
+
+
+                    // если товар продается не штучно, а метрами и пр., переделываем в штуки и ставим кратность 1
+                    if (($products[$id]['kratnost'] != 1) && (stripos($products[$id]['unit'], 'шт') == false) && (array_key_exists($products[$id]['code'] , $quantityProducts))) {
+                        $products[$id]['price'] = $products[$id]['price'] * $products[$id]['kratnost'];
+                        $products[$id]['unit'] = 'шт';
+                        $products[$id]['kratnost'] = 1;
+                    }
+                }
+            }
+        }
+
+        return $products;
+    }
+
+
+    /**
+     * Обновление продукта, который уже есть в базе данных и в файле с нестандартными товарами
+     */
+    public static function updateProductWithQuantity($id, $product) {
+
+        $rrc = $product['RRC'];
+
+        $arFields = array(
+            "VAT_ID" => 1,
+            "VAT_INCLUDED" => "Y"
+        );
+        \Bitrix\Catalog\Model\Product::Update($id, $arFields);
+
+        // обновляем розничную цену у товара
+        $type = 1;
+        parent::updatePrice($type, $rrc, $id);
+
+    }
+
 
     /**
      * Парсинг страницы сайта, указанной для товара в xml-прайсе
@@ -194,7 +381,7 @@ class Stk extends Parser
 
             $body = $parseContent[$productId]['body'];
 
-            $el = new CIBlockElement;
+            $el = new \CIBlockElement;
 
             // формируем массив с доп полями элемента
             $PROP = array();
@@ -245,9 +432,9 @@ class Stk extends Parser
                 "ACTIVE"         => "Y",            // активен
                 "PREVIEW_TEXT"   => $body,
                 "DETAIL_TEXT"    => $body,
-                "DETAIL_PICTURE" => CFile::MakeFileArray($_SERVER["DOCUMENT_ROOT"] . $product['pic']),
-                "PREVIEW_PICTURE" => CFile::MakeFileArray($_SERVER["DOCUMENT_ROOT"] . $product['pic']),
-                "CODE" => CUtil::translit($product['name'], "ru" , $params)
+                "DETAIL_PICTURE" => \CFile::MakeFileArray($_SERVER["DOCUMENT_ROOT"] . $product['pic']),
+                "PREVIEW_PICTURE" => \CFile::MakeFileArray($_SERVER["DOCUMENT_ROOT"] . $product['pic']),
+                "CODE" => \CUtil::translit($product['name'], "ru" , $params)
             );
 
             // создаем элемент
@@ -289,7 +476,7 @@ class Stk extends Parser
                 $productsXML[$id]['CAT1'] = $productsCSV[$product['code']]['CAT1'];
                 $productsXML[$id]['CAT2'] = $productsCSV[$product['code']]['CAT2'];
                 $productsXML[$id]['CAT3'] = $productsCSV[$product['code']]['CAT3'];
-                $productsXML[$id]['zakup'] = $productFromMatrixCsv[$product['code']]['ZAKUP'];
+//                $productsXML[$id]['zakup'] = $productFromMatrixCsv[$product['code']]['ZAKUP'];
                 $productsXML[$id]['rrc'] = $productFromMatrixCsv[$product['code']]['RRC'];
             } else {
                 unset($productsXML[$id]);
@@ -303,7 +490,7 @@ class Stk extends Parser
     /**
      * Получаем ID нужных товаров из базы
      */
-    function getIdsFromDB($quantityProducts, $connection) {
+    public static function getIdsFromDB($quantityProducts, $connection) {
 
         $query = 'SELECT
     b_iblock_element.ID,
@@ -330,7 +517,6 @@ WHERE b_iblock_element.IBLOCK_ID = 59 AND b_iblock_element_property.VALUE LIKE "
         }
 
         return $arrIds;
-
     }
 
 }
