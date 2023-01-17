@@ -4,21 +4,34 @@ namespace My\Parser;
 
 ini_set('display_errors',1);
 ini_set("max_execution_time", 300000000);
-require($_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
+//require($_SERVER["DOCUMENT_ROOT"]."/bitrix/header.php");
 
 class Parser
 {
+
+    /**
+     * заменить вывод описания на html
+     */
+    public static function updateHtmlBody($id) {
+
+        $el = new \CIBlockElement;
+        $arLoadProductArray = Array(
+            "DETAIL_TEXT_TYPE" => "html",
+            "PREVIEW_TEXT_TYPE" => "html",
+        );
+        $el->Update($id, $arLoadProductArray);
+    }
+
 
     /**
      * Получение ID категории по ее названию
      */
     public static function getSectionId($name) {
 
-        // определяем ID категории элемента по названию
         $sectionId = false;
         $arFilter = array('IBLOCK_ID' => 59, 'NAME' => $name);
         $arSelect = array('ID');
-        $rsSect = CIBlockSection::GetList(
+        $rsSect = \CIBlockSection::GetList(
             Array("SORT"=>"ASC"), //сортировка
             $arFilter, //фильтр (выше объявили)
             false, //выводить количество элементов - нет
@@ -72,7 +85,7 @@ class Parser
         $extraCharge = $zakup/$price;
         $extraCharge = number_format($extraCharge, 2, '.', '');
 
-        CIBlockElement::SetPropertyValuesEx($id,59,['10656' => $extraCharge]);
+        \CIBlockElement::SetPropertyValuesEx($id,59,['10656' => $extraCharge]);
 
         $arFields = array(
             "VAT_ID" => 1,
@@ -219,7 +232,7 @@ class Parser
         $arFields = [];
         $arSelect = Array("ID");
         $arFilter = Array("IBLOCK_ID"=>59, "PROPERTY_CODE_JDE" => $code);
-        $res = CIBlockElement::GetList(Array(), $arFilter, false, false, $arSelect);
+        $res = \CIBlockElement::GetList(Array(), $arFilter, false, false, $arSelect);
         while($ob = $res->GetNextElement())
         {
             $arFields[] = $ob->GetFields();
