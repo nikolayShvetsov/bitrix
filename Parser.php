@@ -10,6 +10,88 @@ class Parser
 {
 
     /**
+     * создаем новый бренд
+     */
+    public function creatBrand($name) {
+
+        $el = new \CIBlockElement;
+
+        // параметры создания символьного кода элементы
+        $params = Array(
+            "max_len" => "100", // обрезает символьный код до 100 символов
+            "change_case" => "L", // буквы преобразуются к нижнему регистру
+            "replace_space" => "_", // меняем пробелы на нижнее подчеркивание
+            "replace_other" => "_", // меняем левые символы на нижнее подчеркивание
+            "delete_repeat_replace" => "true", // удаляем повторяющиеся нижние подчеркивания
+            "use_google" => "false", // отключаем использование google
+        );
+
+        // проставляем все обязательные для элемента поля
+        $arLoadProductArray = Array(
+            "MODIFIED_BY"    => 1, // элемент изменен админом
+            "IBLOCK_ID"      => 39,
+            "NAME"           => $name,
+            "ACTIVE"         => "Y",
+            "CODE" => \CUtil::translit($name, "ru" , $params)
+        );
+
+        // создаем элемент
+        $PRODUCT_ID = $el->Add($arLoadProductArray);
+        return $PRODUCT_ID;
+    }
+
+
+    /**
+     * получаем ID нужного брэнда
+     */
+    public function getNeedleBrandId($connection, $brandName) {
+
+        $arrBrands = self::getAllBrands($connection);
+        $brand = mb_strtolower($brandName);
+        $id = '';
+        $inDB = false;
+
+        foreach ($arrBrands as $key => $brandDb) {
+            $newBrandDb = mb_strtolower($brandDb);
+            if($brand == $newBrandDb){ // такой бренд есть в базе
+                $id = $key;
+                $inDB = true;
+                break;
+            }
+        }
+
+        if(!$inDB) { // если не нашлось в базе ничего
+            $id = self::creatBrand($brand);
+        }
+
+        return $id;
+    }
+
+
+    /**
+     * получаем все бренды из базы
+     */
+    public function getAllBrands($connection) {
+
+        $arrResults = [];
+        $query = 'SELECT
+            b_iblock_element.ID,
+            b_iblock_element.NAME
+        FROM
+            `b_iblock_element`
+        WHERE b_iblock_element.IBLOCK_ID = 39';
+
+        $result = $connection->query($query);
+
+        while($arrResult = $result->fetch()) {
+            $arrResults[$arrResult['ID']]['NAME'] = $arrResult['NAME'];
+        }
+
+        return $arrResults;
+    }
+
+
+    /**
      * заменить вывод описания на html
      */
     public static function updateHtmlBody($id) {
@@ -87,21 +169,23 @@ class Parser
 
         \CIBlockElement::SetPropertyValuesEx($id,59,['10656' => $extraCharge]);
 
+
         $arFields = array(
             "VAT_ID" => 1,
             "VAT_INCLUDED" => "Y",
             "QUANTITY" => $product['quantity'],
             "WEIGHT" => $product['weight'],
+            "MEASURE" => 5, // единица измерения штуки
         );
         \Bitrix\Catalog\Model\Product::Update($id, $arFields);
 
         // обновляем закупочную цену у товара
         $type = 2;
-        self::updatePrice($type, $zakup, $id);
+//        self::updatePrice($type, $zakup, $id);
 
         // обновляем розничную цену у товара
         $type = 1;
-        self::updatePrice($type, $rrc, $id);
+//        self::updatePrice($type, $rrc, $id);
     }
 
 
@@ -156,12 +240,12 @@ class Parser
 
                 }
             } else {
-                $filename = '/home/bitrix/ext_www/omess.ru/upload/stot-new/' . $id . '_0.jpg';
+                $filename = '/home/bitrix/ext_www/omess.ru/upload/' .$folder . '/' . $id . '_0.jpg';
                 $pic = self::uploadPic($filename, $url, $id, 0, $folder);
             }
         } else {
 
-            $filename = '/home/bitrix/ext_www/omess.ru/upload/stot-new/' . $id . '.jpg';
+            $filename = '/home/bitrix/ext_www/omess.ru/upload/' . $folder . '/' . $id . '.jpg';
 
             $pic = self::uploadPic($filename, $url, $id, null, $folder);
         }
